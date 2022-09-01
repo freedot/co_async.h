@@ -9,18 +9,26 @@ namespace co {
   template<typename T>
   auto promise(promise_cb_t<T>&& cb) {
     struct awaitable {
-      T value;
-      promise_cb_t<T> cb;
       bool await_ready() { return false; }
       void await_suspend(std::coroutine_handle<> resolve) {
         cb([this, resolve](T&& v) {
-          value = std::move(v);
+          ::new (static_cast<void*>(std::addressof(value)))
+            T(std::forward<T>(v));
+          value_inited = true;
           resolve.resume();
           });
       }
       T await_resume() { return std::move(value); }
-      awaitable(promise_cb_t<T>&& cb) noexcept : cb(std::move(cb)) {}
-      ~awaitable() noexcept {}
+      awaitable(promise_cb_t<T>&& cb) noexcept : cb(std::move(cb)), value_inited(false) {}
+      ~awaitable() noexcept {
+        if (std::exchange(value_inited, false)) {
+          value.~T();
+        }
+      }
+    private:
+      T value;
+      promise_cb_t<T> cb;
+      bool value_inited;
     };
     return awaitable(std::move(cb));
   }
@@ -73,7 +81,6 @@ namespace co {
 
     handle_type handle;
     promise_type& promise;
-    bool destroying;
 
     struct awaitable_value {
       async<T>* a;
@@ -120,15 +127,14 @@ namespace co {
       return r;
     }
 
-    explicit async(handle_type handle, promise_type& promise) noexcept : handle(handle), promise(promise), destroying(false) {}
-    ~async() { destroy(); }
+    explicit async(handle_type handle, promise_type& promise) noexcept : handle(handle), promise(promise) {}
     async() = delete;
     async(const async&) = delete;
     async& operator= (const async&) = delete;
     async& operator= (async&&) = delete;
 
   private:
-    T& result()& {
+    T& result() {
       if (promise.type == promise_type::value_type::value) {
         return promise.value;
       }
@@ -144,10 +150,7 @@ namespace co {
     }
 
     void destroy() {
-      if (!destroying) {
-        destroying = true;
-        handle.destroy();
-      }
+      handle.destroy();
     }
   };
 }
