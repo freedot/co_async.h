@@ -1,3 +1,4 @@
+// https://github.com/freedot/co_async.h
 #pragma once
 #include <coroutine>
 #include <functional>
@@ -25,6 +26,8 @@ namespace co {
           value.~T();
         }
       }
+      awaitable(const awaitable&) = delete;
+      awaitable& operator=(const awaitable&) = delete;
     private:
       T value;
       promise_cb_t<T> cb;
@@ -35,11 +38,10 @@ namespace co {
 
   template<typename T>
   struct async {
-    struct promise_type;
-    using handle_type = std::coroutine_handle<promise_type>;
     struct awaitable_final;
 
     struct promise_type {
+      std::coroutine_handle<> await_handle;
       bool done = false;
 
       enum class value_type { empty, value, exception };
@@ -48,9 +50,7 @@ namespace co {
         T value;
         std::exception_ptr exception;
       };
-      async get_return_object() {
-        return async(handle_type::from_promise(*this), *this);
-      }
+      async get_return_object() { return async(std::coroutine_handle<promise_type>::from_promise(*this), *this);}
       std::suspend_never initial_suspend() { return {}; }
       awaitable_final final_suspend() noexcept { return awaitable_final(*this); }
       template<std::convertible_to<T> From>
@@ -74,12 +74,10 @@ namespace co {
         }
       }
       promise_type(const promise_type&) = delete;
-      promise_type(promise_type&&) = delete;
-      promise_type& operator= (const promise_type&) = delete;
-      promise_type& operator= (promise_type&&) = delete;
+      promise_type& operator=(const promise_type&) = delete;
     };
 
-    handle_type handle;
+    std::coroutine_handle<> handle;
     promise_type& promise;
 
     struct awaitable_value {
@@ -87,8 +85,13 @@ namespace co {
       bool await_ready() {
         return false;
       }
-      auto await_suspend(handle_type h) {
-        return h;
+      void await_suspend(std::coroutine_handle<> h) {
+        if (!a->promise.done) {
+          a->promise.await_handle = h;
+        }
+        else {
+          h.resume();
+        }
       }
       T await_resume() {
         auto r = std::move(a->result());
@@ -97,23 +100,22 @@ namespace co {
       }
       explicit awaitable_value(async<T>* a) noexcept : a(a) {}
       awaitable_value(const awaitable_value&) = delete;
-      awaitable_value(awaitable_value&&) = delete;
-      awaitable_value& operator= (const awaitable_value&) = delete;
-      awaitable_value& operator= (awaitable_value&&) = delete;
+      awaitable_value& operator=(const awaitable_value&) = delete;
     };
 
     struct awaitable_final {
       promise_type& promise;
       bool await_ready() const noexcept { return false; }
-      void await_suspend(handle_type h) noexcept {
+      void await_suspend(std::coroutine_handle<> h) noexcept {
         promise.done = true;
+        if (promise.await_handle) {
+          promise.await_handle.resume();
+        }
       }
       void await_resume() noexcept {}
       explicit awaitable_final(promise_type& promise) noexcept : promise(promise) {}
       awaitable_final(const awaitable_final&) = delete;
-      awaitable_final(awaitable_final&&) = delete;
-      awaitable_final& operator= (const awaitable_final&) = delete;
-      awaitable_final& operator= (awaitable_final&&) = delete;
+      awaitable_final& operator=(const awaitable_final&) = delete;
     };
 
     auto operator co_await() {
@@ -127,11 +129,9 @@ namespace co {
       return r;
     }
 
-    explicit async(handle_type handle, promise_type& promise) noexcept : handle(handle), promise(promise) {}
-    async() = delete;
+    explicit async(std::coroutine_handle<> handle, promise_type& promise) noexcept : handle(handle), promise(promise) {}
     async(const async&) = delete;
-    async& operator= (const async&) = delete;
-    async& operator= (async&&) = delete;
+    async& operator=(const async&) = delete;
 
   private:
     T& result() {
