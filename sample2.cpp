@@ -36,11 +36,11 @@ co::async<int> wait_sec(int sec) {
     });
 }
 
-co::async<int> fun() {
+co::async<int> fun(int id) {
 
-  std::cout << "start wait: " << std::time(nullptr) << std::endl;
+  std::cout << id << " wait start, time:" << std::time(nullptr) << std::endl;
   co_await wait_sec(5); // 等待5秒
-  std::cout << "wait end: " << std::time(nullptr) << std::endl;
+  std::cout << id << " wait end, time:" << std::time(nullptr) << std::endl;
 
   co_return 0;
 }
@@ -48,7 +48,7 @@ co::async<int> fun() {
 int main() {
 
   for (int i = 0; i < 10; i++) {
-    fun();
+    fun(i);
     g_timers.update();
     std::this_thread::sleep_for(1s);
   }
