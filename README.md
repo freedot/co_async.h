@@ -1,5 +1,6 @@
 # co_async.h
 单文件简易的c++20协程库
+(暂不支持 co::async<void> 或 co::async<>, 必须有返回值)
 
 
 // 示例一
