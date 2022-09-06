@@ -2,8 +2,6 @@
 #pragma once
 #include <coroutine>
 #include <functional>
-#include <set>
-#include <mutex>
 
 namespace co {
   template<typename T>
@@ -32,7 +30,6 @@ namespace co {
       awaitable(const awaitable&) = delete;
       awaitable& operator=(const awaitable&) = delete;
     private:
-      //alignas(T) unsigned char value[sizeof(T)];
       typename std::aligned_storage<sizeof(T)>::type value;
       promise_cb_t<T> cb;
       bool value_inited;
@@ -40,33 +37,16 @@ namespace co {
     return awaitable(std::move(cb));
   }
 
-  struct hanging_handles {
-  private:
-    std::mutex mutex;
-    std::set<std::coroutine_handle<>> handles;
-  public:
-    void insert(std::coroutine_handle<>& h) {
-      std::lock_guard<std::mutex> guard(mutex);
-      handles.insert(h);
-    }
-    void erase(std::coroutine_handle<>& h) {
-      std::lock_guard<std::mutex> guard(mutex);
-      handles.erase(h);
-    }
-    ~hanging_handles() {
-      for (auto& h : handles) h.destroy();
-      handles.clear();
-    }
-  };
-  static hanging_handles s_hanging_handles;
-
   template<typename T>
   struct async {
     struct awaitable_final;
 
     struct promise_type {
-      std::coroutine_handle<> await_handle;
-      bool done = false;
+      async<T>* a;
+      std::coroutine_handle<> prev_handle;
+      std::coroutine_handle<> handle;
+      bool done;
+      bool final_ready;
 
       enum class value_type { empty, value, exception };
       value_type type = value_type::empty;
@@ -74,7 +54,10 @@ namespace co {
         T value;
         std::exception_ptr exception;
       };
-      async get_return_object() { return async(std::coroutine_handle<promise_type>::from_promise(*this), *this); }
+      async get_return_object() {
+        handle = std::coroutine_handle<promise_type>::from_promise(*this);
+        return async(this);
+      }
       std::suspend_never initial_suspend() { return {}; }
       awaitable_final final_suspend() noexcept { return awaitable_final(*this); }
       template<std::convertible_to<T> From>
@@ -88,7 +71,13 @@ namespace co {
           std::exception_ptr(std::current_exception());
         type = value_type::exception;
       }
-      promise_type() noexcept {}
+      void destroy() {
+        if (handle) {
+          handle.destroy();
+          handle = nullptr;
+        }
+      }
+      promise_type() noexcept : a(nullptr), done(false), final_ready(false) {}
       ~promise_type() noexcept {
         if (type == value_type::value) {
           value.~T();
@@ -96,23 +85,24 @@ namespace co {
         else if (type == value_type::exception) {
           exception.~exception_ptr();
         }
+        if (a) a->promise = nullptr;
       }
+
       promise_type(const promise_type&) = delete;
       promise_type& operator=(const promise_type&) = delete;
     };
 
-    std::coroutine_handle<> handle;
-    promise_type& promise;
+    promise_type* promise;
 
     struct awaitable_value {
       async<T>* a;
       bool await_ready() { return false; }
-      void await_suspend(std::coroutine_handle<> h) {
-        if (!a->promise.done) {
-          a->promise.await_handle = h;
+      void await_suspend(std::coroutine_handle<> prev_handle) {
+        if (!a->promise->done) {
+          a->promise->prev_handle = prev_handle;
         }
         else {
-          h.resume();
+          prev_handle.resume();
         }
       }
       T await_resume() {
@@ -127,11 +117,16 @@ namespace co {
 
     struct awaitable_final {
       promise_type& promise;
-      bool await_ready() const noexcept { return false; }
+      bool await_ready() const noexcept {
+        if (promise.final_ready) {
+          promise.a->promise = nullptr;
+        }
+        return promise.final_ready;
+      }
       void await_suspend(std::coroutine_handle<> h) noexcept {
         promise.done = true;
-        if (promise.await_handle) {
-          promise.await_handle.resume();
+        if (promise.prev_handle) {
+          promise.prev_handle.resume();
         }
       }
       void await_resume() noexcept {}
@@ -151,10 +146,12 @@ namespace co {
       return r;
     }
 
-    explicit async(std::coroutine_handle<> handle, promise_type& promise) noexcept : handle(handle), promise(promise) {}
+    explicit async(promise_type* promise) noexcept : promise(promise) {
+      promise->a = this;
+    }
     ~async() {
-      if (handle) {
-        s_hanging_handles.insert(handle);
+      if (promise) {
+        promise->final_ready = true;
       }
     }
     async(const async&) = delete;
@@ -162,11 +159,11 @@ namespace co {
 
   private:
     T& result() {
-      if (promise.type == promise_type::value_type::value) {
-        return promise.value;
+      if (promise->type == promise_type::value_type::value) {
+        return promise->value;
       }
-      else if (promise.type == promise_type::value_type::exception) {
-        auto e = std::move(promise.exception);
+      else if (promise->type == promise_type::value_type::exception) {
+        auto e = std::move(promise->exception);
         destroy();
         std::rethrow_exception(e);
       }
@@ -177,10 +174,8 @@ namespace co {
     }
 
     void destroy() {
-      if (handle) {
-        handle.destroy();
-        s_hanging_handles.erase(handle);
-        handle = nullptr;
+      if (promise) {
+        promise->destroy();
       }
     }
   };
