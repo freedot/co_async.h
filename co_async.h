@@ -59,7 +59,7 @@ namespace co {
     }
   };
   static hanging_handles s_hanging_handles;
-  
+
   template<typename T>
   struct async {
     struct awaitable_final;
@@ -121,7 +121,6 @@ namespace co {
         return r;
       }
       explicit awaitable_value(async<T>* a) noexcept : a(a) {}
-      ~awaitable_value() {}
       awaitable_value(const awaitable_value&) = delete;
       awaitable_value& operator=(const awaitable_value&) = delete;
     };
@@ -137,7 +136,6 @@ namespace co {
       }
       void await_resume() noexcept {}
       explicit awaitable_final(promise_type& promise) noexcept : promise(promise) {}
-      ~awaitable_final() {}
       awaitable_final(const awaitable_final&) = delete;
       awaitable_final& operator=(const awaitable_final&) = delete;
     };
