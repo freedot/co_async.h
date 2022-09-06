@@ -13,23 +13,25 @@ namespace co {
       bool await_ready() { return false; }
       void await_suspend(std::coroutine_handle<> resolve) {
         cb([this, resolve](T&& v) {
-          ::new (static_cast<void*>(std::addressof(value)))
-            T(std::forward<T>(v));
+          ::new (&value) T(std::forward<T>(v));
           value_inited = true;
           resolve.resume();
           });
       }
-      T await_resume() { return std::move(value); }
+      T&& await_resume() {
+        return std::move(*(reinterpret_cast<T*>(&value)));
+      }
       awaitable(promise_cb_t<T>&& cb) noexcept : cb(std::move(cb)), value_inited(false) {}
       ~awaitable() noexcept {
         if (std::exchange(value_inited, false)) {
-          value.~T();
+          reinterpret_cast<T*>(&value)->~T();
         }
       }
       awaitable(const awaitable&) = delete;
       awaitable& operator=(const awaitable&) = delete;
     private:
-      T value;
+      //alignas(T) unsigned char value[sizeof(T)];
+      typename std::aligned_storage<sizeof(T)>::type value;
       promise_cb_t<T> cb;
       bool value_inited;
     };
