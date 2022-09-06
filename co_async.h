@@ -2,6 +2,8 @@
 #pragma once
 #include <coroutine>
 #include <functional>
+#include <set>
+#include <mutex>
 
 namespace co {
   template<typename T>
@@ -38,6 +40,26 @@ namespace co {
     return awaitable(std::move(cb));
   }
 
+  struct hanging_handles {
+  private:
+    std::mutex mutex;
+    std::set<std::coroutine_handle<>> handles;
+  public:
+    void insert(std::coroutine_handle<>& h) {
+      std::lock_guard<std::mutex> guard(mutex);
+      handles.insert(h);
+    }
+    void erase(std::coroutine_handle<>& h) {
+      std::lock_guard<std::mutex> guard(mutex);
+      handles.erase(h);
+    }
+    ~hanging_handles() {
+      for (auto& h : handles) h.destroy();
+      handles.clear();
+    }
+  };
+  static hanging_handles s_hanging_handles;
+  
   template<typename T>
   struct async {
     struct awaitable_final;
@@ -52,7 +74,7 @@ namespace co {
         T value;
         std::exception_ptr exception;
       };
-      async get_return_object() { return async(std::coroutine_handle<promise_type>::from_promise(*this), *this);}
+      async get_return_object() { return async(std::coroutine_handle<promise_type>::from_promise(*this), *this); }
       std::suspend_never initial_suspend() { return {}; }
       awaitable_final final_suspend() noexcept { return awaitable_final(*this); }
       template<std::convertible_to<T> From>
@@ -84,9 +106,7 @@ namespace co {
 
     struct awaitable_value {
       async<T>* a;
-      bool await_ready() {
-        return false;
-      }
+      bool await_ready() { return false; }
       void await_suspend(std::coroutine_handle<> h) {
         if (!a->promise.done) {
           a->promise.await_handle = h;
@@ -101,6 +121,7 @@ namespace co {
         return r;
       }
       explicit awaitable_value(async<T>* a) noexcept : a(a) {}
+      ~awaitable_value() {}
       awaitable_value(const awaitable_value&) = delete;
       awaitable_value& operator=(const awaitable_value&) = delete;
     };
@@ -116,6 +137,7 @@ namespace co {
       }
       void await_resume() noexcept {}
       explicit awaitable_final(promise_type& promise) noexcept : promise(promise) {}
+      ~awaitable_final() {}
       awaitable_final(const awaitable_final&) = delete;
       awaitable_final& operator=(const awaitable_final&) = delete;
     };
@@ -132,6 +154,11 @@ namespace co {
     }
 
     explicit async(std::coroutine_handle<> handle, promise_type& promise) noexcept : handle(handle), promise(promise) {}
+    ~async() {
+      if (handle) {
+        s_hanging_handles.insert(handle);
+      }
+    }
     async(const async&) = delete;
     async& operator=(const async&) = delete;
 
@@ -152,7 +179,11 @@ namespace co {
     }
 
     void destroy() {
-      handle.destroy();
+      if (handle) {
+        handle.destroy();
+        s_hanging_handles.erase(handle);
+        handle = nullptr;
+      }
     }
   };
 }
