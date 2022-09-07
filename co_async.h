@@ -54,9 +54,9 @@ namespace co {
         T value;
         std::exception_ptr exception;
       };
-      async get_return_object() {
+      async get_return_object() { 
         handle = std::coroutine_handle<promise_type>::from_promise(*this);
-        return async(this);
+        return async(this); 
       }
       std::suspend_never initial_suspend() { return {}; }
       awaitable_final final_suspend() noexcept { return awaitable_final(*this); }
@@ -118,10 +118,7 @@ namespace co {
     struct awaitable_final {
       promise_type& promise;
       bool await_ready() const noexcept {
-        if (promise.final_ready) {
-          promise.a->promise = nullptr;
-        }
-        return promise.final_ready;
+        return promise.final_ready; 
       }
       void await_suspend(std::coroutine_handle<> h) noexcept {
         promise.done = true;
@@ -140,7 +137,7 @@ namespace co {
     }
 
     T await(std::function<bool()> update) {
-      while (!promise.done && update());
+      while (!promise->done && update());
       auto r = std::move(result());
       destroy();
       return r;
