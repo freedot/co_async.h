@@ -30,7 +30,7 @@ namespace co {
       awaitable(const awaitable&) = delete;
       awaitable& operator=(const awaitable&) = delete;
     private:
-      typename std::aligned_storage<sizeof(T)>::type value;
+      alignas(T) std::byte value[sizeof(T)];
       promise_cb_t<T> cb;
       bool value_inited;
     };
